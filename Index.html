@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Interactive Planet Explorer – Mobile Friendly</title>
+<style>
+body { margin:0; background:#000; overflow:hidden; font-family:Arial; }
+canvas { display:block; }
+#tooltip { display:none; position:absolute; padding:6px 10px; background:#000; color:#fff;
+          border:1px solid #444; border-radius:6px; font-size:14px; pointer-events:none; z-index:30; }
+#infoBox {
+  position:absolute; bottom:20px; left:50%; transform:translateX(-50%);
+  width:90%; max-width:600px; background:#111; border:2px solid #444; padding:20px;
+  border-radius:15px; color:#fff; display:none; z-index:20; opacity:0; transition:opacity 0.25s ease;
+}
+#ui { position:absolute; top:10px; left:10px; z-index:10; }
+button { padding:8px 14px; margin-right:6px; border:none; border-radius:6px;
+         background:#222; color:#fff; cursor:pointer; }
+.navArrow { position:absolute; top:50%; transform:translateY(-50%);
+  font-size:40px; color:#fff; cursor:pointer; user-select:none;
+  z-index:40; text-shadow:0 0 10px #000;
+}
+#leftArrow { left:20px; }
+#rightArrow { right:20px; }
+</style>
+</head>
+<body>
+<canvas id="sim"></canvas>
+<div id="tooltip"></div>
+
+<div id="ui">
+  <button id="toggleOrbit">Toggle Orbits</button>
+  <button id="pauseBtn">Pause / Play</button>
+  <button id="resetView">Reset View</button>
+</div>
+
+<div id="infoBox">
+  <h2 id="planetName"></h2>
+  <div id="planetDesc"></div>
+  <button onclick="exitFocus()">Back</button>
+</div>
+
+<div id="leftArrow" class="navArrow">&#8592;</div>
+<div id="rightArrow" class="navArrow">&#8594;</div>
+
+<script>
+const canvas = document.getElementById("sim");
+const ctx = canvas.getContext("2d");
+canvas.width = innerWidth;
+canvas.height = innerHeight;
+
+let showOrbits = true;
+let paused = false;
+let zoom = 1, zoomTarget = 1;
+let focusedPlanet = null;
+let cameraX = 0, cameraY = 0;
+let targetCameraX = 0, targetCameraY = 0;
+
+const tooltip = document.getElementById("tooltip");
+
+// Stars
+function randomStars(count){
+  let stars = [];
+  for(let i=0;i<count;i++){
+    stars.push({x:Math.random()*canvas.width, y:Math.random()*canvas.height, r:Math.random()*1.5+0.5, baseAlpha:Math.random()*0.5+0.3});
+  }
+  return stars;
+}
+const stars = randomStars(200);
+
+// Planet data
+const planets = [
+  { name:"Mercury", size:8, dist:60, speed:0.04, desc:"Smallest planet, closest to the Sun. Avg temp ~167°C. No water.", gradient:["#aaa","#888"], distanceFromSun:57.9, distanceFromEarth:91.7, moons:0 },
+  { name:"Venus", size:12, dist:90, speed:0.03, desc:"Second planet. Avg temp ~464°C. Thick CO₂ clouds. No water.", gradient:["#f5e0a1","#e3ae4a"], distanceFromSun:108.2, distanceFromEarth:41.4, moons:0 },
+  { name:"Earth", size:16, dist:120, speed:0.025, desc:"Earth! Avg temp ~15°C. Liquid water. Life exists.", gradient:["#4ac0ff","#2f9c5a","#a0ff90"], distanceFromSun:149.6, distanceFromEarth:0, moons:1 },
+  { name:"Mars", size:12, dist:150, speed:0.02, desc:"Fourth planet. Avg temp ~-60°C. May have ice water.", gradient:["#d14f34","#a6321f"], distanceFromSun:227.9, distanceFromEarth:78.3, moons:2 },
+  { name:"Jupiter", size:28, dist:200, speed:0.012, desc:"Largest planet. Gas giant. Avg temp ~-110°C.", gradient:["#cfa77b","#a37750","#f5d8a3"], distanceFromSun:778.6, distanceFromEarth:628.7, moons:79 },
+  { name:"Saturn", size:24, dist:250, speed:0.01, rings:true, desc:"Gas giant with rings. Avg temp ~-140°C.", gradient:["#d4c28a","#a78c63","#f5e0a1"], distanceFromSun:1433.5, distanceFromEarth:1279, moons:83 },
+  { name:"Uranus", size:20, dist:300, speed:0.008, desc:"Ice giant. Avg temp ~-195°C. Spins sideways.", gradient:["#9de5f0","#7ac9d6","#6ec8d9"], distanceFromSun:2872.5, distanceFromEarth:2721, moons:16 },
+  { name:"Neptune", size:20, dist:340, speed:0.007, desc:"Ice giant. Avg temp ~-200°C. Fast winds.", gradient:["#4777ff","#2741a8","#1f2b66"], distanceFromSun:4495.1, distanceFromEarth:4350, moons:14 }
+];
+
+const sun = { name:"Sun", size:35, desc:"The center of our Solar System. Provides light and heat to all planets. Diameter ~1.39 million km. Surface temp ~5500°C.", gradient:["#fffacd","#ffff00","#ffaa00"] };
+
+// Initialize planet angles & moons
+planets.forEach(p => {
+  p.angle = Math.random()*Math.PI*2;
+  p.moonData = [];
+  let moonCount = Math.min(p.moons,8);
+  for(let i=0;i<moonCount;i++){
+    p.moonData.push({
+      dist: p.size + 10 + Math.random()*15 + i*3,
+      angle: Math.random()*Math.PI*2,
+      speed: 0.01 + Math.random()*0.02 + i*0.002
+    });
+  }
+});
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // Stars
+  ctx.fillStyle="#fff";
+  stars.forEach(s=>{
+    const alpha = s.baseAlpha + 0.1*Math.sin(Date.now()/1000 + s.x);
+    ctx.globalAlpha = alpha;
+    ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,Math.PI*2); ctx.fill();
+  });
+  ctx.globalAlpha=1;
+
+  ctx.save();
+  ctx.translate(canvas.width/2 - cameraX, canvas.height/2 - cameraY);
+  ctx.scale(zoom, zoom);
+
+  if(!focusedPlanet){
+    // Sun
+    const sunGrad = ctx.createRadialGradient(0,0,5,0,0,sun.size);
+    sun.gradient.forEach((c,i)=>sunGrad.addColorStop(i/(sun.gradient.length-1),c));
+    ctx.fillStyle = sunGrad;
+    ctx.beginPath(); ctx.arc(0,0,sun.size,0,Math.PI*2); ctx.fill();
+
+    // Orbits
+    if(showOrbits){
+      ctx.strokeStyle = "rgba(255,255,255,0.3)";
+      ctx.lineWidth = 1.5;
+      planets.forEach(p=>{
+        ctx.beginPath(); ctx.arc(0,0,p.dist,0,Math.PI*2); ctx.stroke();
+      });
+    }
+
+    // Planets
+    planets.forEach(p=>{
+      const x = Math.cos(p.angle)*p.dist;
+      const y = Math.sin(p.angle)*p.dist;
+      p.x = x; p.y = y;
+
+      if(p.rings){
+        ctx.beginPath();
+        ctx.strokeStyle = "rgba(200,200,160,0.5)";
+        ctx.lineWidth = 6;
+        ctx.ellipse(x,y,p.size+12,p.size+4,0,0,Math.PI*2);
+        ctx.stroke();
+      }
+
+      const grad = ctx.createRadialGradient(x-2,y-2,1,x,y,p.size);
+      p.gradient.forEach((c,i)=>grad.addColorStop(i/(p.gradient.length-1),c));
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(x,y,p.size,0,Math.PI*2);
+      ctx.fill();
+    });
+  } else {
+    // Focused planet
+    const p = focusedPlanet;
+    const x=0, y=0;
+
+    const grad = ctx.createRadialGradient(x-2,y-2,1,x,y,p.size);
+    p.gradient.forEach((c,i)=>grad.addColorStop(i/(p.gradient.length-1),c));
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(x,y,p.size,0,Math.PI*2);
+    ctx.fill();
+
+    if(p.rings){
+      ctx.beginPath();
+      ctx.strokeStyle = "rgba(200,200,160,0.5)";
+      ctx.lineWidth = 6;
+      ctx.ellipse(x,y,p.size+12,p.size+4,0,0,Math.PI*2);
+      ctx.stroke();
+    }
+
+    // Moons
+    p.moonData.forEach(m=>{
+      m.angle += m.speed;
+      const mx = x + Math.cos(m.angle)*m.dist;
+      const my = y + Math.sin(m.angle)*m.dist;
+      ctx.fillStyle="#ccc";
+      ctx.beginPath(); ctx.arc(mx,my,3,0,Math.PI*2); ctx.fill();
+    });
+
+    // Dim rest
+    ctx.globalAlpha = 0.2;
+    planets.forEach(other=>{
+      if(other !== p){
+        const ox = Math.cos(other.angle)*other.dist;
+        const oy = Math.sin(other.angle)*other.dist;
+        const grad = ctx.createRadialGradient(ox-2,oy-2,1,ox,oy,other.size);
+        other.gradient.forEach((c,i)=>grad.addColorStop(i/(other.gradient.length-1),c));
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(ox,oy,other.size,0,Math.PI*2); ctx.fill();
+      }
+    });
+    const sunGrad = ctx.createRadialGradient(0,0,5,0,0,sun.size);
+    sun.gradient.forEach((c,i)=>sunGrad.addColorStop(i/(sun.gradient.length-1),c));
+    ctx.fillStyle = sunGrad;
+    ctx.beginPath(); ctx.arc(0,0,sun.size,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=1;
+  }
+
+  ctx.restore();
+
+  cameraX += (targetCameraX - cameraX)*0.08;
+  cameraY += (targetCameraY - cameraY)*0.08;
+  zoom += (zoomTarget - zoom)*0.05;
+
+  if(!paused && !focusedPlanet) planets.forEach(p=>p.angle+=p.speed);
+
+  requestAnimationFrame(draw);
+}
+draw();
+
+function mouseToWorld(mx,my){ return { x: mx - canvas.width/2 + cameraX, y: my - canvas.height/2 + cameraY }; }
+
+// Mouse / touch events
+function handleClick(mx,my){
+  const mouse = mouseToWorld(mx,my);
+
+  if(mouse.x*mouse.x + mouse.y*mouse.y <= sun.size*sun.size){ openInfo(sun); return; }
+  for(const p of planets){
+    const dx=mouse.x - p.x, dy=mouse.y - p.y;
+    if(dx*dx + dy*dy <= (p.size+14)*(p.size+14)){ openInfo(p); return; }
+  }
+}
+
+canvas.addEventListener("mousemove", e=>{
+  if(focusedPlanet) { tooltip.style.display="none"; return; }
+  const rect = canvas.getBoundingClientRect();
+  const mouse = mouseToWorld(e.clientX-rect.left,e.clientY-rect.top);
+  let found=null;
+
+  if(mouse.x*mouse.x + mouse.y*mouse.y <= sun.size*sun.size) found=sun;
+
+  for(const p of planets){
+    const dx=mouse.x - p.x, dy=mouse.y - p.y;
+    if(dx*dx + dy*dy <= (p.size+14)*(p.size+14)){ found=p; break; }
+  }
+
+  if(found){
+    tooltip.style.display="block";
+    tooltip.style.opacity = 1;
+    tooltip.innerText = found.name;
+    tooltip.targetPlanet = found;
+  } else {
+    tooltip.style.opacity = 0;
+    tooltip.targetPlanet = null;
+    setTimeout(()=>{ if(!tooltip.targetPlanet) tooltip.style.display="none"; },250);
+  }
+});
+
+canvas.addEventListener("click", e=>{ handleClick(e.clientX, e.clientY); });
+canvas.addEventListener("touchstart", e=>{ handleClick(e.touches[0].clientX, e.touches[0].clientY); });
+
+// Info box
+function openInfo(p){
+  paused = true;
+  zoomTarget = 3;
+  focusedPlanet = planets.includes(p)?p:null;
+  targetCameraX = 0; targetCameraY = 0;
+
+  const box = document.getElementById("infoBox");
+  const nameEl = document.getElementById("planetName");
+  const descEl = document.getElementById("planetDesc");
+
+  const color = p.gradient ? p.gradient[0] : "yellow";
+  box.style.borderColor = color;
+  box.style.boxShadow = `0 0 25px ${color}55`;
+
+  const icon = `<span style="display:inline-block;width:20px;height:20px;background:${color};border-radius:50%;margin-right:10px;vertical-align:middle;"></span>`;
+  nameEl.innerHTML = icon + p.name;
+
+  if(p.distanceFromSun){
+    descEl.innerHTML = `
+      <ul style="padding-left:18px;line-height:1.4;">
+        <li>${p.desc}</li>
+        <li>Distance from Sun: ${p.distanceFromSun} million km</li>
+        <li>Distance from Earth: ${p.distanceFromEarth} million km</li>
+        <li>Number of moons: ${p.moons}</li>
+      </ul>`;
+  } else { descEl.innerHTML = `<p>${p.desc}</p>`; }
+
+  box.style.display = "block";
+  setTimeout(()=>{ box.style.opacity = 1; },10);
+}
+
+function exitFocus(){
+  focusedPlanet = null;
+  zoomTarget = 1;
+  paused = false;
+  targetCameraX = 0;
+  targetCameraY = 0;
+  document.getElementById("infoBox").style.opacity = 0;
+  setTimeout(()=>{ document.getElementById("infoBox").style.display="none"; },200);
+}
+
+// Arrows
+document.getElementById("leftArrow").addEventListener("click", ()=>{
+  if(!focusedPlanet) return;
+  let i = planets.indexOf(focusedPlanet);
+  i = (i-1+planets.length)%planets.length;
+  openInfo(planets[i]);
+});
+document.getElementById("rightArrow").addEventListener("click", ()=>{
+  if(!focusedPlanet) return;
+  let i = planets.indexOf(focusedPlanet);
+  i = (i+1)%planets.length;
+  openInfo(planets[i]);
+});
+
+// UI
+document.getElementById("toggleOrbit").onclick = ()=> showOrbits = !showOrbits;
+document.getElementById("pauseBtn").onclick = ()=> paused = !paused;
+document.getElementById("resetView").onclick = ()=>{ zoomTarget=1; paused=false; focusedPlanet=null; targetCameraX=0; targetCameraY=0; }
+
+</script>
+</body>
+</html>
